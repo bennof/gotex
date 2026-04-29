@@ -1,0 +1,39 @@
+.DS_Store
+
+# Local Tectonic cache and installed binary
+.tectonic-cache/
+tectonic
+
+# Generated LaTeX artifacts
+*.pdf
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+sender-*.tex
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+env/
+venv/
+
+# Go
+dist/
+vendor/
+
+# Build output
+*.exe
+*.test
+*.prof
+
+# test files
+worksheet.tex
+tex2.sh
+fontconfig.tex
+letter.tex

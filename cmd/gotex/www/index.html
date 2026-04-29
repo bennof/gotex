@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GoTeX</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <h1>GoTeX</h1>
+        <p>Minimaler LaTeX-Build im Browser</p>
+      </div>
+      <div class="actions">
+        <button id="buildButton" type="button">Build</button>
+        <button id="downloadButton" type="button" disabled>Download</button>
+      </div>
+    </header>
+
+    <section class="panel">
+      <label class="panel-title" for="sourceInput">TeX-Eingabe</label>
+      <textarea id="sourceInput" spellcheck="false">\documentclass{article}
+\begin{document}
+Hallo Welt!
+\end{document}
+</textarea>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Log-Ausgabe</div>
+      <pre id="logOutput" class="log-output">Bereit.</pre>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

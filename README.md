@@ -176,7 +176,6 @@ The final PDF is then served through `GET /files/<id>`.
 - `bfbook.cls`
 - `bfletter.cls`
 - `addfonts.sty`
-- `fontconfig.tex`
 
 ### `edolatex`
 
@@ -214,11 +213,7 @@ Under `texmf/doc/latex/bflatex/` you will find example and test files, including
 - `literature.bib`
 - `tikz.tex`
 
-The project root also contains concrete working files such as:
 
-- `worksheet.tex`
-- `letter.tex`
-- `sender-falkner.tex`
 
 ## Cache and Local Runtime Data
 

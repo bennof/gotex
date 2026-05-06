@@ -183,6 +183,7 @@ func (p *Processor) Process(input io.Reader, outdir string) (*PipeResult, error)
 		VAR_TECTONIC_CACHE_DIR+"="+filepath.Join(p.treepath, TECTONIC_CACHE_FOLDER),
 	)
 	cmd.Stdin = input
+	cmd.Dir = outdir
 
 	log("running tectonic: %s %v", cmd.Path, cmd.Args)
 	log("output dir: %s", outdir)

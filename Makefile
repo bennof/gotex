@@ -1,6 +1,7 @@
-
 GOCMD=./cmd/gotex
+PREFIX ?= /usr/local
 
+.PHONY: install install-linux install-darwin
 
 .PHONY: all build dist dist-all build-all clean clean-all
 
@@ -14,15 +15,15 @@ build-all: dist-all
 	GOOS=darwin GOARCH=amd64 go build -o dist/darwin-amd64/gotex $(GOCMD)
 	GOOS=linux GOARCH=amd64 go build -o dist/linux-amd64/gotex $(GOCMD)
 	GOOS=linux GOARCH=arm64 go build -o dist/linux-arm64/gotex $(GOCMD)
-	GOOS=windows GOARCH=amd64 go build -o dist/windows-amd64/gotex.exe $(GOCMD)
+	#GOOS=windows GOARCH=amd64 go build -o dist/windows-amd64/gotex.exe $(GOCMD)
+	#GOOS=windows GOARCH=arm64 go build -o dist/windows-arm64/gotex.exe $(GOCMD)
 
 
-cmd/gotex/dist: buildtool
+cmd/gotex/dist: dist/buildtool
 	./dist/buildtool
 
-buildtool: dist dist/buildtool
 
-dist/buildtool:
+dist/buildtool: dist
 	go build -o $@ ./cmd/buildtool
 
 dev: 
@@ -41,3 +42,18 @@ clean:
 
 clean-all: clean
 	rm -rf .tectonic-cache
+
+install:
+	@uname_s=$$(uname -s); \
+	case "$$uname_s" in \
+		Linux*)  $(MAKE) install-linux ;; \
+		Darwin*) $(MAKE) install-darwin ;; \
+		*) echo "Unsupported OS: $$uname_s"; exit 1 ;; \
+	esac
+
+install-linux: build
+	install -Dm755 dist/gotex $(DESTDIR)$(PREFIX)/bin/gotex
+
+install-darwin: build
+	install -d $(DESTDIR)$(PREFIX)/bin
+	install -m755 dist/gotex $(DESTDIR)$(PREFIX)/bin/gotex

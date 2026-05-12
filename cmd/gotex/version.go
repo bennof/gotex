@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 package main
 
-const Version = "0.01"
+const Version = "0.02"
 const ServerName = "gotex"
 const ServerMode = "latex"
 

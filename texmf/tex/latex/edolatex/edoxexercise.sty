@@ -134,6 +134,13 @@
 }
 
 
+\newcommand{\solutionpagebreak}{%
+  \global\setbox\b@solution\vbox{%
+    \unvbox\b@solution
+    \penalty-10000
+  }%
+}
+
 %%% ------------------------------------------------------------
 %%% Print exercise points summary
 %%% ------------------------------------------------------------
@@ -154,6 +161,8 @@
   \setcounter{exercisepoints}{0}%
   \global\setbox\b@exercisepoints=\hbox{}%
 }
+
+
 
 
 %%% ------------------------------------------------------------
@@ -187,6 +196,7 @@
 %%% ------------------------------------------------------------
 \providecommand{\printsolutions}{%
   \if@solution@hascontent
+  \markright{\solutionname}
     \noindent{\Large\textbf{\solutionname}\newline}
     \unvbox\b@solution
   \fi

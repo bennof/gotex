@@ -4,7 +4,7 @@
 package main
 
 import (
-	"bufio"
+	"errors"
 	"flag"
 	"io"
 	"log"
@@ -17,28 +17,41 @@ import (
 
 	"github.com/bennof/gotex/gotex"
 	"github.com/bennof/gotex/simpleserver"
+	"github.com/bennof/gotex/simpleserver/session"
+	"github.com/bennof/gotex/simpleserver/stream"
 )
 
-const MaxImageSize int64 = 10 << 20
-const MaxSessionSize int64 = 50 << 20
+var (
+	ErrUnsupportedFileType      = errors.New("unsupported file type")
+	ErrSessionSizeLimitExceeded = errors.New("session size limit exceeded")
+	ErrFileSizeLimitExceeded    = errors.New("file size limit exceeded")
+	ErrFailedToOpenUpload       = errors.New("failed to open upload")
+	ErrFailedToCreateFile       = errors.New("failed to create file")
+	ErrFailedToSaveUpload       = errors.New("failed to save upload")
+	ErrFailedToCheckSize        = errors.New("failed to check session size")
+)
 
 // runServe handles the "serve" subcommand.
 // It initializes the tectonic processor, creates a temporary directory for build output,
 // registers HTTP handlers, and starts the server on the given port.
 func runServe(args []string) {
+
+	// get wd
 	wd, err := os.Getwd()
 	if err != nil {
 		log.Fatalln(err)
 	}
 
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
-	target := flags.String("t", "", "target directory")
-	binary := flags.String("b", "", "binary directory")
-	tree := flags.String("m", "", "TeXMF Tree directory")
-	tempdir := flags.String("d", filepath.Join(wd, "tmp"), "temporary directory")
-	port := flags.String("p", ":8080", "server port")
-	//MaxImageSize_ := flags.String("MaxImageSize", "", "target directory")
-	//MaxSessionSize_ := flags.String("MaxSessionSize", "", "target directory")
+	target := flags.String("d", "", "tectonic installation directory")
+	binary := flags.String("binary", "", "tectonic binary directory")
+	tree := flags.String("texmf", "", "TeXMF tree directory")
+	tempdir := flags.String("t", filepath.Join(wd, "tmp"), "working directory for build sessions")
+	port := flags.String("addr", ":8080", "listen address (e.g. :8080)")
+	maxFileSize := flags.Int64("max-file", 2<<20, "max uploaded file size in bytes (default 2 MiB)")
+	maxSessionSize := flags.Int64("max-session-size", 20<<20, "max total session size in bytes (default 20 MiB)")
+	maxSession := flags.Int("max-sessions", 20, "max concurrent sessions")
+	storeTtl := flags.Duration("ttl", 15*time.Minute, "session lifetime (e.g. 15m, 1h)")
 	flags.Parse(args)
 
 	binpath, treepath, err := resolvePaths(*target, *binary, *tree)
@@ -53,7 +66,7 @@ func runServe(args []string) {
 	}
 
 	// Create the temporary build directory and remove it on exit.
-	err = os.MkdirAll(*tempdir, os.ModePerm)
+	err = os.MkdirAll(*tempdir, 0700)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -63,25 +76,14 @@ func runServe(args []string) {
 
 	s := simpleserver.NewSimpleServer(simpleserver.WithConfig(simpleserver.Config{Addr: simpleserver.NormalizeAddr(*port)}))
 
-	newBuildJob := func() (string, string, error) {
-		id, err := newID()
-		if err != nil {
-			return "", "", err
-		}
-
-		path := filepath.Join(*tempdir, id)
-		if err = os.MkdirAll(path, os.ModePerm); err != nil {
-			return "", "", err
-		}
-
-		return id, path, nil
+	// create session manager
+	ps, err := session.NewPoolStore[*session.SessionFS](*maxSession, *storeTtl, session.NewSessionFS(*tempdir, *maxSessionSize))
+	if err != nil {
+		log.Fatalln(err)
 	}
+	defer ps.Close()
 
 	// Serve embedded static files from the www directory.
-	//sub, err := fs.Sub(wwwFiles, "www")
-	//if err != nil {
-	//	log.Fatalln(err)
-	//}
 	s.Handle("/", http.FileServer(http.FS(wwwFiles)))
 
 	// /info returns basic metadata about the server and its capabilities.
@@ -91,6 +93,60 @@ func runServe(args []string) {
 			"version":   Version,
 			"mode":      ServerMode,
 			"extension": ServerExtensions,
+			"capabilities": map[string]any{
+				"tikz":        true,
+				"assets":      true,
+				"streaming":   true,
+				"max_file":    *maxFileSize,
+				"max_session": *maxSessionSize,
+				"ttl":         storeTtl.String(),
+			},
+			"hints": []string{
+				"Prefer TikZ over external images where possible",
+				"Use \\includegraphics only for photographs and scans",
+				"Assets support: jpg, jpeg, png, pdf",
+			},
+			"endpoints": []map[string]any{
+				{
+					"method":      "GET",
+					"path":        "/info",
+					"description": "Returns server capabilities and endpoint documentation.",
+					"response":    "JSON object with server info, capabilities, hints and endpoints.",
+				},
+				{
+					"method":      "GET",
+					"path":        "/new",
+					"description": "Creates a new session with a dedicated working directory. Use this before uploading assets or building with /build/{id}.",
+					"response":    `{"id": "<session-id>", "path": "/files/<session-id>"}`,
+				},
+				{
+					"method":      "POST",
+					"path":        "/build",
+					"description": "Compiles a LaTeX document from the request body. Creates a temporary session automatically. Use when no assets are needed.",
+					"body":        "LaTeX source as plain text (Content-Type: text/plain)",
+					"response":    "NDJSON stream. Each line is a JSON object with field 'type': 'log' (build output), 'error' (build error), or 'done' (url field contains PDF path).",
+				},
+				{
+					"method":      "POST",
+					"path":        "/build/{id}",
+					"description": "Compiles a LaTeX document in an existing session. Use after uploading assets via /assets/{id}. The session working directory is available to the compiler.",
+					"body":        "LaTeX source as plain text (Content-Type: text/plain)",
+					"response":    "NDJSON stream. Same format as /build.",
+				},
+				{
+					"method":      "GET",
+					"path":        "/files/{id}",
+					"description": "Returns the compiled PDF for the given session. Add query parameter dl=1 to force download. The session is deleted after a download.",
+					"response":    "PDF file (Content-Type: application/pdf)",
+				},
+				{
+					"method":      "POST",
+					"path":        "/assets/{id}",
+					"description": "Uploads one or more files to the session working directory. Uploaded files can be referenced in LaTeX via \\includegraphics{filename}.",
+					"body":        "multipart/form-data with one or more files. Allowed types: jpg, jpeg, png, pdf.",
+					"response":    `{"id": "<session-id>", "files": [{"name": "<filename>", "path": "/assets/<id>/<name>", "size": <bytes>}]}`,
+				},
+			},
 		})
 	})
 
@@ -100,15 +156,15 @@ func runServe(args []string) {
 			return
 		}
 
-		id, _, err := newBuildJob()
+		sfs, err := ps.Create(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		s.WriteJSON(w, http.StatusOK, map[string]any{
-			"id":   id,
-			"path": "/files/" + id,
+			"id":   sfs.ID(),
+			"path": "/files/" + sfs.ID(),
 		})
 	})
 
@@ -122,60 +178,42 @@ func runServe(args []string) {
 		}
 
 		// Generate a unique ID and create a dedicated output directory for this build.
-		id, path, err := newBuildJob()
+		sfs, err := ps.Create(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		// Run the tectonic processor with the request body as input.
-		res, err := p.Process(r.Body, path)
+		res, err := p.Process(r.Body, sfs.Path())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		defer res.Reader.Close()
 
-		// Set up streaming NDJSON response headers.
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		w.Header().Set("Cache-Control", "no-cache")
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-			return
-		}
-
-		// Stream each line of tectonic output as a "log" message to the client.
-		scanner := bufio.NewScanner(res.Reader)
-		for scanner.Scan() {
-			line := scanner.Text()
-			err = writeStreamMessage(w, streamMessage{Type: "log", Data: line})
-			if err != nil {
-				_ = writeStreamMessage(w, streamMessage{Type: "error", Data: err.Error()})
-				flusher.Flush()
-				return
-			}
-			flusher.Flush()
-		}
-		if err := scanner.Err(); err != nil {
-			_ = writeStreamMessage(w, streamMessage{Type: "error", Data: err.Error()})
-			flusher.Flush()
-			return
-		}
-
-		// Wait for the tectonic process to finish and check for errors.
-		if err = res.Wait(); err != nil {
-			_ = writeStreamMessage(w, streamMessage{Type: "error", Data: err.Error()})
-			flusher.Flush()
-			return
-		}
-
-		// Send the final "done" message with the URL to retrieve the PDF.
-		err = writeStreamMessage(w, streamMessage{Type: "done", URL: "/files/" + id})
+		xstream, err := stream.NewSimpleXndJSON(w)
 		if err != nil {
-			_ = writeStreamMessage(w, streamMessage{Type: "error", Data: err.Error()})
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		flusher.Flush()
+
+		// stream process output
+		err = xstream.StreamReader(res.Reader)
+		if err != nil {
+			log.Println(err)
+		}
+
+		if err = res.Wait(); err != nil {
+			xstream.Error(err)
+			log.Println(err)
+			return
+		}
+		err = xstream.Write(stream.SimpleXndJSONMsg{Type: "done", URL: "/files/" + sfs.ID()})
+		if err != nil {
+			log.Println(err)
+			return
+		}
 	})
 
 	s.HandleFunc("/build/", func(w http.ResponseWriter, r *http.Request) {
@@ -190,61 +228,51 @@ func runServe(args []string) {
 			return
 		}
 		id := parts[1]
-		path := filepath.Join(*tempdir, id)
 
-		info, err := os.Stat(path)
-		if err != nil {
+		sfs, ok := ps.Get(id)
+		if !ok {
 			http.Error(w, "session not found", http.StatusBadRequest)
 			return
 		}
-		if !info.IsDir() {
+
+		info, err := sfs.Stat("")
+		if err != nil || !info.IsDir() {
 			http.Error(w, "invalid session path", http.StatusBadRequest)
+			if err = ps.Delete(id); err != nil {
+				log.Println(err)
+			}
 			return
 		}
 
-		res, err := p.Process(r.Body, path)
+		res, err := p.Process(r.Body, sfs.Path())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		defer res.Reader.Close()
 
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		w.Header().Set("Cache-Control", "no-cache")
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		xstream, err := stream.NewSimpleXndJSON(w)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		scanner := bufio.NewScanner(res.Reader)
-		for scanner.Scan() {
-			line := scanner.Text()
-			err = writeStreamMessage(w, streamMessage{Type: "log", Data: line})
-			if err != nil {
-				_ = writeStreamMessage(w, streamMessage{Type: "error", Data: err.Error()})
-				flusher.Flush()
-				return
-			}
-			flusher.Flush()
-		}
-		if err := scanner.Err(); err != nil {
-			_ = writeStreamMessage(w, streamMessage{Type: "error", Data: err.Error()})
-			flusher.Flush()
-			return
+		// stream process output
+		err = xstream.StreamReader(res.Reader)
+		if err != nil {
+			log.Println(err)
 		}
 
 		if err = res.Wait(); err != nil {
-			_ = writeStreamMessage(w, streamMessage{Type: "error", Data: err.Error()})
-			flusher.Flush()
+			xstream.Error(err)
+			log.Println(err)
 			return
 		}
-
-		err = writeStreamMessage(w, streamMessage{Type: "done", URL: "/files/" + id})
+		err = xstream.Write(stream.SimpleXndJSONMsg{Type: "done", URL: "/files/" + id})
 		if err != nil {
-			_ = writeStreamMessage(w, streamMessage{Type: "error", Data: err.Error()})
+			log.Println(err)
+			return
 		}
-		flusher.Flush()
 	})
 
 	// /files/{id} serves the compiled PDF for the given build ID.
@@ -263,11 +291,16 @@ func runServe(args []string) {
 			http.Error(w, "invalid file path", http.StatusBadRequest)
 			return
 		}
-		id := parts[len(parts)-1]
+		id := parts[1]
+
+		sfs, ok := ps.Get(id)
+		if !ok {
+			http.Error(w, "session not found", http.StatusNotFound)
+			return
+		}
 
 		// Verify the output PDF exists and is not a directory.
-		path := filepath.Join(*tempdir, id, "texput.pdf")
-		info, err := os.Stat(path)
+		info, err := sfs.Stat("texput.pdf")
 		if err != nil {
 			http.Error(w, "file not found", http.StatusBadRequest)
 			return
@@ -288,14 +321,14 @@ func runServe(args []string) {
 		w.Header().Set("Content-Type", "application/pdf")
 		w.Header().Set("Content-Disposition", disposition)
 		w.Header().Set("Cache-Control", "no-cache")
-		if err = sendFile(w, path); err != nil {
+		if err = simpleserver.SendFile(w, sfs.PathJoin("texput.pdf")); err != nil {
 			http.Error(w, "file not accessible", http.StatusInternalServerError)
 			return
 		}
 
 		// Clean up the build directory only after an explicit download.
 		if download {
-			if err = os.RemoveAll(filepath.Join(*tempdir, id)); err != nil {
+			if err = ps.Delete(id); err != nil {
 				s.Log(err.Error())
 			}
 		}
@@ -314,100 +347,55 @@ func runServe(args []string) {
 		}
 		id := parts[1]
 
-		sessionDir := filepath.Join(*tempdir, id)
-		info, err := os.Stat(sessionDir)
-		if err != nil {
-			http.Error(w, "session not found", http.StatusBadRequest)
-			return
-		}
-		if !info.IsDir() {
-			http.Error(w, "invalid session path", http.StatusBadRequest)
+		sfs, ok := ps.Get(id)
+		if !ok {
+			http.Error(w, "session not found", http.StatusNotFound)
 			return
 		}
 
-		currentSize, err := dirSize(sessionDir)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if currentSize >= MaxSessionSize {
-			http.Error(w, "session size limit exceeded", http.StatusRequestEntityTooLarge)
-			return
-		}
-
-		r.Body = http.MaxBytesReader(w, r.Body, MaxImageSize+(1<<20))
-		if err = r.ParseMultipartForm(MaxImageSize + (1 << 20)); err != nil {
+		r.Body = http.MaxBytesReader(w, r.Body, *maxFileSize+(1<<20))
+		if err := r.ParseMultipartForm(*maxFileSize + (1 << 20)); err != nil {
 			http.Error(w, "invalid upload", http.StatusBadRequest)
 			return
 		}
 
-		header := firstUploadedFile(r.MultipartForm)
-		if header == nil {
+		if len(r.MultipartForm.File) == 0 {
 			http.Error(w, "missing upload file", http.StatusBadRequest)
 			return
 		}
 
-		name := filepath.Base(header.Filename)
-		ext := strings.ToLower(filepath.Ext(name))
-		switch ext {
-		case ".jpg", ".jpeg", ".png", ".pdf":
-		default:
-			http.Error(w, "unsupported file type", http.StatusBadRequest)
-			return
+		type result struct {
+			Name string `json:"name"`
+			Path string `json:"path"`
+			Size int64  `json:"size"`
 		}
+		var results []result
 
-		remainingSize := MaxSessionSize - currentSize
-		if remainingSize <= 0 {
-			http.Error(w, "session size limit exceeded", http.StatusRequestEntityTooLarge)
-			return
-		}
-
-		limit := MaxImageSize
-		if remainingSize < limit {
-			limit = remainingSize
-		}
-
-		src, err := header.Open()
-		if err != nil {
-			http.Error(w, "failed to open upload", http.StatusInternalServerError)
-			return
-		}
-		defer src.Close()
-
-		targetPath := filepath.Join(sessionDir, name)
-		dst, err := os.Create(targetPath)
-		if err != nil {
-			http.Error(w, "failed to save upload", http.StatusInternalServerError)
-			return
-		}
-
-		written, copyErr := io.Copy(dst, io.LimitReader(src, limit+1))
-		closeErr := dst.Close()
-		if copyErr != nil {
-			_ = os.Remove(targetPath)
-			http.Error(w, "failed to save upload", http.StatusInternalServerError)
-			return
-		}
-		if closeErr != nil {
-			_ = os.Remove(targetPath)
-			http.Error(w, "failed to save upload", http.StatusInternalServerError)
-			return
-		}
-		if written > limit {
-			_ = os.Remove(targetPath)
-			if limit < MaxImageSize {
-				http.Error(w, "session size limit exceeded", http.StatusRequestEntityTooLarge)
-				return
+		for _, headers := range r.MultipartForm.File {
+			for _, header := range headers {
+				name, written, err := handleAssetUpload(sfs, header, *maxFileSize, *maxSessionSize)
+				if err != nil {
+					switch {
+					case errors.Is(err, ErrSessionSizeLimitExceeded), errors.Is(err, ErrFileSizeLimitExceeded):
+						http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+					case errors.Is(err, ErrUnsupportedFileType):
+						http.Error(w, err.Error(), http.StatusBadRequest)
+					default:
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+					}
+					return
+				}
+				results = append(results, result{
+					Name: name,
+					Path: "/assets/" + id + "/" + name,
+					Size: written,
+				})
 			}
-			http.Error(w, "image size limit exceeded", http.StatusRequestEntityTooLarge)
-			return
 		}
 
 		s.WriteJSON(w, http.StatusOK, map[string]any{
-			"id":   id,
-			"name": name,
-			"path": "/assets/" + id + "/" + name,
-			"size": written,
+			"id":    id,
+			"files": results,
 		})
 	})
 
@@ -416,76 +404,63 @@ func runServe(args []string) {
 	}
 }
 
-// startCleanupLoop launches a background goroutine that periodically scans
-// the session root and removes directories older than storeDuration.
-// It uses the directory timestamp from os.Stat as the portable age marker.
-func startCleanupLoop(root string, cleanupTimer, storeDuration time.Duration, logger *log.Logger) {
-	go func() {
-		ticker := time.NewTicker(cleanupTimer)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			cutoff := time.Now().Add(-storeDuration)
-
-			entries, err := os.ReadDir(root)
-			if err != nil {
-				if logger != nil {
-					logger.Printf("cleanup: cannot read %s: %v", root, err)
-				}
-				continue
-			}
-
-			for _, entry := range entries {
-				if !entry.IsDir() {
-					continue
-				}
-
-				path := filepath.Join(root, entry.Name())
-				info, err := entry.Info()
-				if err != nil {
-					if logger != nil {
-						logger.Printf("cleanup: cannot stat %s: %v", path, err)
-					}
-					continue
-				}
-
-				if info.ModTime().Before(cutoff) {
-					if err := os.RemoveAll(path); err != nil {
-						if logger != nil {
-							logger.Printf("cleanup: cannot remove %s: %v", path, err)
-						}
-					}
-				}
-			}
-		}
-	}()
-}
-
-func firstUploadedFile(form *multipart.Form) *multipart.FileHeader {
-	if form == nil {
-		return nil
+func handleAssetUpload(sfs *session.SessionFS, header *multipart.FileHeader, maxFileSize, maxSessionSize int64) (string, int64, error) {
+	name := filepath.Base(header.Filename)
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".pdf":
+	default:
+		return "", 0, ErrUnsupportedFileType
 	}
-	for _, headers := range form.File {
-		if len(headers) > 0 {
-			return headers[0]
-		}
-	}
-	return nil
-}
 
-func dirSize(root string) (int64, error) {
-	var size int64
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			size += info.Size()
-		}
-		return nil
-	})
+	currentSize, err := sfs.DirSize()
 	if err != nil {
-		return 0, err
+		log.Println("assets: DirSize:", err)
+		return "", 0, ErrFailedToCheckSize
 	}
-	return size, nil
+
+	remainingSize := maxSessionSize - currentSize
+	if remainingSize <= 0 {
+		return "", 0, ErrSessionSizeLimitExceeded
+	}
+
+	limit := maxFileSize
+	if remainingSize < limit {
+		limit = remainingSize
+	}
+
+	src, err := header.Open()
+	if err != nil {
+		log.Println("assets: open upload:", err)
+		return "", 0, ErrFailedToOpenUpload
+	}
+	defer src.Close()
+
+	targetPath := sfs.PathJoin(name)
+	dst, err := os.Create(targetPath)
+	if err != nil {
+		log.Println("assets: create file:", err)
+		return "", 0, ErrFailedToCreateFile
+	}
+
+	written, copyErr := io.Copy(dst, io.LimitReader(src, limit+1))
+	closeErr := dst.Close()
+	if copyErr != nil {
+		_ = os.Remove(targetPath)
+		log.Println("assets: copy:", copyErr)
+		return "", 0, ErrFailedToSaveUpload
+	}
+	if closeErr != nil {
+		_ = os.Remove(targetPath)
+		log.Println("assets: close:", closeErr)
+		return "", 0, ErrFailedToSaveUpload
+	}
+	if written > limit {
+		_ = os.Remove(targetPath)
+		if limit < maxSessionSize {
+			return "", 0, ErrSessionSizeLimitExceeded
+		}
+		return "", 0, ErrFileSizeLimitExceeded
+	}
+	return name, written, nil
 }

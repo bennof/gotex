@@ -65,9 +65,7 @@
 \automark[subsection]{section}
 
 \newcommand{\bfarticle@copyrightnotice}{%
-  \makeatletter
   \textcolor{gray!40}{\footnotesize © \the\year\ \@author}%
-  \makeatother
 }
 \newcommand{\copyrightnotice}[1]{\renewcommand{\bfarticle@copyrightnotice}{#1}}
 

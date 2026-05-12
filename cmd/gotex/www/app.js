@@ -221,7 +221,8 @@ async function uploadFile(file) {
     throw new Error(`${file.name}: ${await readErrorMessage(response)}`);
   }
 
-  const data = await response.json();
+  const resp = await response.json();
+  const data = resp.files[0];
   const previewUrl = file.type === "image/png" || file.type === "image/jpeg"
     ? URL.createObjectURL(file)
     : "";

@@ -1,7 +1,10 @@
 GOCMD=./cmd/gotex
 PREFIX ?= /usr/local
+INSTALL_USER := $(or $(SUDO_USER),$(USER))
+INSTALL_HOME := $(or $(SUDO_HOME),$(HOME))
+TEXMF := $(INSTALL_HOME)/.gotex/texmf
 
-.PHONY: install install-linux install-darwin
+.PHONY: install install-system install-user install-linux install-darwin
 
 .PHONY: all build dist dist-all build-all clean clean-all
 
@@ -45,11 +48,13 @@ clean:
 clean-all: clean
 	rm -rf .tectonic-cache
 
-install:
+install: install-system install-user
+
+install-system:
 	@uname_s=$$(uname -s); \
 	case "$$uname_s" in \
-		Linux*)  $(MAKE) install-linux ;; \
-		Darwin*) $(MAKE) install-darwin ;; \
+		Linux*)  $(MAKE) install-linux INSTALL_USER="$(INSTALL_USER)" INSTALL_HOME="$(INSTALL_HOME)" TEXMF="$(TEXMF)";; \
+		Darwin*) $(MAKE) install-darwin INSTALL_USER="$(INSTALL_USER)" INSTALL_HOME="$(INSTALL_HOME)" TEXMF="$(TEXMF)";; \
 		*) echo "Unsupported OS: $$uname_s"; exit 1 ;; \
 	esac
 
@@ -59,3 +64,20 @@ install-linux: $(GOCMD)
 install-darwin: $(GOCMD)
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m755 dist/gotex $(DESTDIR)$(PREFIX)/bin/gotex
+
+
+install-user:
+	install -d "$(TEXMF)"
+	cp -r texmf/* "$(TEXMF)/"
+	chown -R $(INSTALL_USER):$(INSTALL_USER) "$(INSTALL_HOME)/.gotex"
+
+	@echo ""
+	@echo "Add the following to your shell profile:"
+	@echo ""
+	@echo "export GOTEX_PATH=$(INSTALL_HOME)/.gotex"
+	@echo ""
+	@echo "For Bash:"
+	@echo "  echo 'export GOTEX_PATH=$(INSTALL_HOME)/.gotex' >> ~/.bashrc"
+	@echo ""
+	@echo "For Zsh:"
+	@echo "  echo 'export GOTEX_PATH=$(INSTALL_HOME)/.gotex' >> ~/.zshrc"

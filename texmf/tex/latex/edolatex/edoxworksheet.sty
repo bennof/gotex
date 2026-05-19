@@ -224,3 +224,33 @@
   \endgroup
   \pagestyle{\ws@savedpagestyle}%
 }
+
+
+\newcommand{\answerbox}[2][\textwidth]{%
+  \vbox{%
+    \hrule
+    \@tempcnta=0
+    \loop
+      \advance\@tempcnta by 1
+      \vskip 1cm
+      \hrule width #1
+      \ifdim \@tempcnta cm < #2
+    \repeat
+  }%
+}
+
+\newcommand{\mathbox}[2][\textwidth]{%
+  \vbox{%
+    \@tempcnta=0
+    \hrule width #1
+    \loop
+      \advance\@tempcnta by 1
+      \hbox to #1{%
+        \cleaders\hbox{\vrule height 0.5cm depth 0pt\hskip 0.5cm}\hfill
+        \vrule height 0.5cm depth 0pt
+      }%
+      \hrule width #1
+      \ifdim \@tempcnta\dimexpr 0.5cm\relax < #2
+    \repeat
+  }%
+}

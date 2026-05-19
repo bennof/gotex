@@ -7,6 +7,8 @@ PREFIX ?= /usr/local
 
 all: build
 	
+$(GOCMD): build 
+
 build: dist cmd/gotex/dist
 	go build -o dist/gotex $(GOCMD)
 
@@ -51,9 +53,9 @@ install:
 		*) echo "Unsupported OS: $$uname_s"; exit 1 ;; \
 	esac
 
-install-linux: build
+install-linux: $(GOCMD)
 	install -Dm755 dist/gotex $(DESTDIR)$(PREFIX)/bin/gotex
 
-install-darwin: build
+install-darwin: $(GOCMD)
 	install -d $(DESTDIR)$(PREFIX)/bin
 	install -m755 dist/gotex $(DESTDIR)$(PREFIX)/bin/gotex

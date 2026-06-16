@@ -1,4 +1,6 @@
-// embed_prod.go
+// Copyright (c) 2026 Benjamin Benno Falkner
+// SPDX-License-Identifier: MIT
+// embed_prod.go embeds the compiled web assets for production mode.
 //go:build !dev
 
 package main

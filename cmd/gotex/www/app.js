@@ -1,6 +1,5 @@
 const sourceInput = document.getElementById("sourceInput");
 const logOutput = document.getElementById("logOutput");
-const loginButton = document.getElementById("loginButton");
 const buildButton = document.getElementById("buildButton");
 const showButton = document.getElementById("showButton");
 const downloadButton = document.getElementById("downloadButton");
@@ -8,87 +7,32 @@ const assetList = document.getElementById("assetList");
 const dropArea = document.getElementById("dropArea");
 const fileInput = document.getElementById("fileInput");
 const filePickerButton = document.getElementById("filePickerButton");
-const loginPanel = document.getElementById("loginPanel");
-const usernameInput = document.getElementById("usernameInput");
-const passwordInput = document.getElementById("passwordInput");
-const loginSubmitButton = document.getElementById("loginSubmitButton");
-const loginStatus = document.getElementById("loginStatus");
 
-let downloadUrl = "";
 let sessionId = "";
-let authUsername = "";
-let authPassword = "";
+let sessionUrl = "";
+let downloadUrl = "";
 const assetEntries = new Map();
+
+function clearSessionState() {
+  sessionId = "";
+  sessionUrl = "";
+  downloadUrl = "";
+  showButton.disabled = true;
+  downloadButton.disabled = true;
+
+  for (const asset of assetEntries.values()) {
+    if (asset.previewUrl) {
+      URL.revokeObjectURL(asset.previewUrl);
+    }
+  }
+
+  assetEntries.clear();
+  renderAssetList();
+}
 
 async function readErrorMessage(response) {
   const text = (await response.text()).trim();
   return text || `HTTP ${response.status}`;
-}
-
-function authHeaders(extraHeaders = {}) {
-  if (!authUsername || !authPassword) {
-    return extraHeaders;
-  }
-
-  return {
-    ...extraHeaders,
-    Authorization: `Basic ${btoa(`${authUsername}:${authPassword}`)}`,
-  };
-}
-
-function setLoginStatus(text) {
-  loginStatus.textContent = text;
-}
-
-function toggleLoginPanel() {
-  loginPanel.hidden = !loginPanel.hidden;
-}
-
-async function checkLogin() {
-  const username = usernameInput.value.trim();
-  const password = passwordInput.value;
-
-  if (!username || !password) {
-    setLoginStatus("Please enter username and password.");
-    return;
-  }
-
-  setLoginStatus("Checking login ...");
-
-  try {
-    const response = await fetch("/auth", {
-      method: "HEAD",
-      headers: authHeaders({
-        Authorization: `Basic ${btoa(`${username}:${password}`)}`,
-      }),
-    });
-
-    if (response.ok) {
-      authUsername = username;
-      authPassword = password;
-      setLoginStatus("Login successful. Credentials will be sent with requests.");
-      appendLog("Login successful.");
-      return;
-    }
-
-    if (response.status === 401 || response.status === 403) {
-      authUsername = "";
-      authPassword = "";
-      setLoginStatus("Login failed. Invalid username or password.");
-      appendLog("Login failed: invalid credentials.");
-      return;
-    }
-
-    authUsername = "";
-    authPassword = "";
-    setLoginStatus("Auth endpoint unavailable or not configured.");
-    appendLog(`Login unavailable: HTTP ${response.status}`);
-  } catch (error) {
-    authUsername = "";
-    authPassword = "";
-    setLoginStatus("Auth endpoint unavailable or not configured.");
-    appendLog(`Login unavailable: ${error.message}`);
-  }
 }
 
 async function ensureSession() {
@@ -96,20 +40,21 @@ async function ensureSession() {
     return sessionId;
   }
 
-  const response = await fetch("/new", {
-    headers: authHeaders(),
+  const response = await fetch("/session", {
+    method: "POST",
   });
   if (!response.ok) {
-    throw new Error(`Session HTTP ${response.status}`);
+    throw new Error(await readErrorMessage(response));
   }
 
   const data = await response.json();
-  if (!data.id) {
-    throw new Error("Keine Session-ID erhalten");
+  if (!data.id || !data.path) {
+    throw new Error("No session information returned");
   }
 
   sessionId = data.id;
-  appendLog(`Session: ${sessionId}`);
+  sessionUrl = data.path;
+  appendLog(`Session ready: ${sessionId}`);
   return sessionId;
 }
 
@@ -125,6 +70,8 @@ function appendLog(text) {
 
 function setBusy(isBusy) {
   buildButton.disabled = isBusy;
+  filePickerButton.disabled = isBusy;
+  fileInput.disabled = isBusy;
   sourceInput.disabled = isBusy;
 }
 
@@ -144,7 +91,7 @@ function renderAssetList() {
   if (assetEntries.size === 0) {
     const emptyItem = document.createElement("li");
     emptyItem.className = "asset-empty";
-    emptyItem.textContent = "Noch keine Dateien hochgeladen.";
+    emptyItem.textContent = "No uploaded assets yet.";
     assetList.appendChild(emptyItem);
     return;
   }
@@ -204,16 +151,15 @@ async function uploadFile(file) {
   const id = await ensureSession();
   const ext = file.name.split(".").pop()?.toLowerCase() || "";
   if (!["jpg", "jpeg", "png", "pdf"].includes(ext)) {
-    appendLog(`Übersprungen: ${file.name}`);
+    appendLog(`Skipped unsupported file: ${file.name}`);
     return;
   }
 
   const formData = new FormData();
   formData.append("file", file, file.name);
 
-  const response = await fetch(`/assets/${id}`, {
+  const response = await fetch(`/session/${id}/upload`, {
     method: "POST",
-    headers: authHeaders(),
     body: formData,
   });
 
@@ -221,8 +167,7 @@ async function uploadFile(file) {
     throw new Error(`${file.name}: ${await readErrorMessage(response)}`);
   }
 
-  const resp = await response.json();
-  const data = resp.files[0];
+  const data = await response.json();
   const previewUrl = file.type === "image/png" || file.type === "image/jpeg"
     ? URL.createObjectURL(file)
     : "";
@@ -234,12 +179,12 @@ async function uploadFile(file) {
 
   assetEntries.set(data.name, {
     name: data.name,
-    size: data.size || file.size,
+    size: data.bytes || file.size,
     previewUrl,
   });
 
   renderAssetList();
-  appendLog(`Hochgeladen: ${data.name}`);
+  appendLog(`Uploaded: ${data.name}`);
 }
 
 async function handleFiles(fileList) {
@@ -254,10 +199,61 @@ async function handleFiles(fileList) {
       await uploadFile(file);
     }
   } catch (error) {
-    appendLog(`Fehler: ${error.message}`);
+    appendLog(`Error: ${error.message}`);
   } finally {
     setBusy(false);
     fileInput.value = "";
+  }
+}
+
+async function consumeBuildStream(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      buffer += decoder.decode();
+      break;
+    }
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      if (!line.trim()) {
+        continue;
+      }
+      handleBuildMessage(JSON.parse(line));
+    }
+  }
+
+  if (buffer.trim()) {
+    handleBuildMessage(JSON.parse(buffer));
+  }
+}
+
+function handleBuildMessage(message) {
+  if (message.type === "log" && message.data) {
+    appendLog(message.data);
+    return;
+  }
+
+  if (message.type === "error" && message.data) {
+    appendLog(`Error: ${message.data}`);
+    return;
+  }
+
+  if (message.type === "done" && message.url) {
+    downloadUrl = message.url;
+    if (!sessionUrl) {
+      sessionUrl = message.url;
+    }
+    showButton.disabled = false;
+    downloadButton.disabled = false;
+    appendLog(`Build finished: ${message.url}`);
   }
 }
 
@@ -266,16 +262,17 @@ async function buildDocument() {
   showButton.disabled = true;
   downloadButton.disabled = true;
   downloadUrl = "";
-  setLog("Build gestartet ...");
+  setLog("Build started ...");
 
   try {
     const id = await ensureSession();
-    appendLog(`Build-Session: ${id}`);
-    const response = await fetch(`/build/${id}`, {
+    appendLog(`Compiling in session ${id} ...`);
+
+    const response = await fetch(`/session/${id}/compile`, {
       method: "POST",
-      headers: authHeaders({
+      headers: {
         "Content-Type": "text/plain; charset=utf-8",
-      }),
+      },
       body: sourceInput.value,
     });
 
@@ -284,43 +281,12 @@ async function buildDocument() {
     }
 
     if (!response.body) {
-      throw new Error("Kein Response-Stream vorhanden");
+      throw new Error("No response stream available");
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-
-      for (const line of lines) {
-        if (!line.trim()) {
-          continue;
-        }
-
-        const message = JSON.parse(line);
-        if (message.type === "log" && message.data) {
-          appendLog(message.data);
-        } else if (message.type === "error" && message.data) {
-          appendLog(`Fehler: ${message.data}`);
-        } else if (message.type === "done" && message.url) {
-          downloadUrl = message.url;
-          showButton.disabled = false;
-          downloadButton.disabled = false;
-          appendLog(`Build abgeschlossen: ${message.url}`);
-        }
-      }
-    }
+    await consumeBuildStream(response.body);
   } catch (error) {
-    appendLog(`Fehler: ${error.message}`);
+    appendLog(`Error: ${error.message}`);
   } finally {
     setBusy(false);
   }
@@ -330,20 +296,23 @@ function downloadDocument() {
   if (!downloadUrl) {
     return;
   }
-  window.location.href = `${downloadUrl}?dl=1`;
+
+  const targetUrl = `${downloadUrl}?dl=1`;
+  clearSessionState();
+  appendLog("Download started. Session will be recreated on the next action.");
+  window.location.href = targetUrl;
 }
 
 function showDocument() {
   if (!downloadUrl) {
     return;
   }
-  window.open(downloadUrl, "_blank");
+
+  window.open(downloadUrl, "_blank", "noopener");
 }
 
 filePickerButton.addEventListener("click", () => fileInput.click());
 fileInput.addEventListener("change", () => handleFiles(fileInput.files));
-loginButton.addEventListener("click", toggleLoginPanel);
-loginSubmitButton.addEventListener("click", checkLogin);
 
 dropArea.addEventListener("dragover", (event) => {
   event.preventDefault();
@@ -378,4 +347,5 @@ sourceInput.addEventListener("drop", (event) => {
 buildButton.addEventListener("click", buildDocument);
 showButton.addEventListener("click", showDocument);
 downloadButton.addEventListener("click", downloadDocument);
+
 renderAssetList();

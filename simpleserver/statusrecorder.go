@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Benjamin Benno Falkner
 // SPDX-License-Identifier: MIT
+
+// statusrecorder.go captures HTTP response status information for wrapped handlers.
 package simpleserver
 
 import "net/http"

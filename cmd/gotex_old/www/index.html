@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GoTeX</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <h1>GoTeX</h1>
+        <p>Minimaler LaTeX-Build im Browser</p>
+      </div>
+      <div class="actions">
+        <button id="loginButton" type="button">Login</button>
+        <button id="buildButton" type="button">Build</button>
+        <button id="showButton" type="button" disabled>Show</button>
+        <button id="downloadButton" type="button" disabled>Download</button>
+      </div>
+    </header>
+
+    <section id="loginPanel" class="panel login-panel" hidden>
+      <div class="panel-title">Login</div>
+      <div class="login-form">
+        <label>
+          <span>Username</span>
+          <input id="usernameInput" type="text" autocomplete="username">
+        </label>
+        <label>
+          <span>Password</span>
+          <input id="passwordInput" type="password" autocomplete="current-password">
+        </label>
+        <div class="login-actions">
+          <button id="loginSubmitButton" type="button">Check Login</button>
+        </div>
+        <p id="loginStatus" class="login-status">Not logged in.</p>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <section class="panel editor-panel">
+        <label class="panel-title" for="sourceInput">TeX-Eingabe</label>
+        <textarea id="sourceInput" spellcheck="false">\documentclass{article}
+\begin{document}
+Hallo Welt!
+\end{document}
+</textarea>
+      </section>
+
+      <section class="panel assets-panel">
+        <div class="panel-title">Assets</div>
+        <ul id="assetList" class="asset-list">
+          <li class="asset-empty">Noch keine Dateien hochgeladen.</li>
+        </ul>
+        <div id="dropArea" class="drop-area">
+          <p>Bilder oder PDF hier ablegen</p>
+          <button id="filePickerButton" type="button">Datei auswählen</button>
+          <input id="fileInput" type="file" accept=".jpg,.jpeg,.png,.pdf" multiple hidden>
+        </div>
+      </section>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Log-Ausgabe</div>
+      <pre id="logOutput" class="log-output">Bereit.</pre>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

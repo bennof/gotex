@@ -2,75 +2,113 @@
 
 GoTeX is a local TeX/Tectonic project with three layers:
 
-- a simple shell setup for local builds
-- a Go library for reusable build logic
-- a small web interface backed by a local build server
+- a shell-based local workflow for fast testing
+- Go packages for reusable build and server logic
+- a lightweight embedded web UI served from a local process
 
-The main focus is a custom `texmf` tree, KOMA-Script-based classes, and full local control over fonts, packages, and document classes.
+The project is centered on a repository-local `texmf` tree, KOMA-Script-based document classes, and full local control over fonts, packages, and document classes.
 
 ## Goals
 
-- use Tectonic locally and reproducibly
-- keep custom classes, packages, and fonts inside the repository
-- maintain German documents based on KOMA-Script
-- reuse build logic from both shell scripts and Go code
-- later process documents, images, and AI-generated LaTeX through a local server
+- run Tectonic locally and reproducibly
+- keep custom TeX classes, packages, and fonts inside the repository
+- support German/KOMA-Script document workflows
+- share build logic between shell scripts and Go code
+- offer a small local server and editor interface for TeX development
 
-## Project Layout
+## Project layout
 
 ```text
 .
+├── Makefile
+├── edotex.mk
 ├── tex.sh
-├── tectonic
+├── go.mod
 ├── texmf/
 │   ├── doc/latex/bflatex/
 │   ├── fonts/
+│   │   ├── opentype/
+│   │   └── truetype/
 │   └── tex/latex/
 │       ├── bflatex/
 │       └── edolatex/
-├── gotex/
-│   ├── cmd.go
-│   └── processor.go
 ├── cmd/gotex/
 │   ├── main.go
-│   ├── runinstall.go
-│   ├── runserv.go
+│   ├── build.go
 │   ├── server.go
-│   ├── util.go
+│   ├── version.go
 │   └── www/
 │       ├── index.html
 │       ├── app.js
 │       └── styles.css
-└── go.mod
+├── tex/
+│   ├── tex.go
+│   ├── utils.go
+│   ├── texmf.go
+│   ├── pipe.go
+│   ├── log.go
+│   └── *.go (platform-specific binaries)
+└── simpleserver/
+    ├── server.go
+    ├── config.go
+    ├── fsutils.go
+    ├── utils.go
+    ├── statusrecorder.go
+    ├── session/
+    └── stream/
 ```
 
-## Shell Workflow
+## Build and install
 
-The shell script `tex.sh` is the simplest entry point.
+The repository includes two build entry points:
 
-### Installation
+- `Makefile` for the default local workflow
+- `edotex.mk` as an alternate makefile with the same core targets
+
+Build the CLI binary:
+
+```sh
+make
+```
+
+Install the binary to the system path:
+
+```sh
+sudo make install
+```
+
+## Shell workflow with `tex.sh`
+
+`tex.sh` is a small helper script for testing Tectonic with the local gotex runtime layout.
+It uses `~/.gotex` by default and expects the Tectonic binary at `~/.gotex/bin/tectonic`.
+
+### Install the runtime
 
 ```sh
 ./tex.sh install
 ```
 
-The script:
+This command downloads Tectonic into `~/.gotex/bin`, creates the local TeX tree directories, and writes a `fontconfig.tex` file into `~/.gotex/texmf/tex/latex/bflatex`.
 
-- downloads Tectonic
-- creates `texmf/tex/latex/bflatex/fontconfig.tex`
-- prepares font configuration for the local tree
-
-### Compile
+### Compile a document
 
 ```sh
 ./tex.sh worksheet.tex
 ```
 
-During compilation:
+This runs Tectonic with:
 
-- all subdirectories under `texmf/` are added as `search-path` entries
-- the local `.tectonic-cache` is used
-- output is written to the directory of the input file
+- `TECTONIC_CACHE_DIR=~/.gotex/.tectonic-cache`
+- all directories under `~/.gotex/texmf` as `-Z search-path=...`
+- `-p` enabled
+- output written to the input file directory by default
+
+You can also pass arbitrary Tectonic arguments through the script:
+
+```sh
+./tex.sh --help
+./tex.sh --shell-escape document.tex
+```
 
 ### Cleanup
 
@@ -78,99 +116,57 @@ During compilation:
 ./tex.sh clean
 ```
 
-This removes typical build artifacts and the local Tectonic cache.
+This removes runtime log files and the local Tectonic cache under `~/.gotex`.
 
-## Go Library
+## Gotex CLI
 
-The `gotex` package contains the reusable build logic.
+The `cmd/gotex` command provides a reusable Go-based toolchain.
 
-Important building blocks:
-
-- `Download(...)`: downloads content as a stream
-- `ReadFile(...)`: opens files as a stream
-- `ShellCmdDir(...)`: runs commands with `stdin`/`stdout` piping
-- `FileWriter(...)`: writes a stream to a file or to `stdout`
-- `NewProcessor(...)`: creates a processor for a binary path and a `texmf` path
-- `(*Processor).Process(...)`: starts Tectonic with all collected local search paths
-
-When a `Processor` is created, it walks the local `texmf` tree and passes all discovered directories to Tectonic as `-Z search-path=...`.
-
-That means the current approach is not limited to only two TeX directories anymore, but can load the full local tree.
-
-## Go CLI
-
-The CLI binary lives in `cmd/gotex`.
-
-Run it with:
-
-```sh
-go run ./cmd/gotex
-```
-
-Available modes:
-
-```sh
-gotex build [args] inputfile
-gotex install [args]
-gotex serve [args]
-```
-
-### Build
+Build or run it with:
 
 ```sh
 go run ./cmd/gotex build worksheet.tex
-go run ./cmd/gotex build -o out worksheet.tex
 ```
 
-### Install
+Key commands:
 
-```sh
-go run ./cmd/gotex install
-```
+- `gotex build [args] <inputfile>`
+- `gotex serve [args]`
+- `gotex clean`
 
-After a successful installation, the CLI prints matching hints for:
+The CLI resolves the local dotpath from `GOTEX_PATH` and the platform-specific default path, then uses `tex.NewProcessor` to prepare Tectonic and the TeX tree.
 
-- `GOTEX_PATH`
-- `GOTEX_BIN`
-- `GOTEX_TEXMF`
+## Go packages
 
-### Serve
+### `tex`
 
-```sh
-go run ./cmd/gotex serve
-```
+The `tex` package contains the core runtime logic that:
 
-Optional:
+- ensures the embedded Tectonic binary is available
+- verifies the local TeX tree exists
+- collects all `texmf` subdirectories as Tectonic `-Z search-path` arguments
+- runs Tectonic with `TECTONIC_CACHE_DIR` set to the local cache folder
 
-```sh
-go run ./cmd/gotex serve -p 8080 -d ./tmp
-```
+### `simpleserver`
 
-## Web Interface
+The `simpleserver` package provides a small HTTP server framework with:
 
-The small SPA lives in `cmd/gotex/www/` and is embedded into the binary using Go `embed`.
+- request routing
+- graceful shutdown
+- session management
+- streaming JSON responses
 
-It currently provides:
+## Web interface
 
-- a text field for LaTeX source
-- a log output area
-- a `Build` button
-- a `Download` button for the generated PDF
+The web UI is stored in `cmd/gotex/www/` and embedded into the binary using Go `embed`.
 
-The browser sends the text via `POST /build` to the server. The server responds with an NDJSON stream containing messages such as:
+It provides a minimal interface for editing LaTeX source and triggering builds through the local server.
 
-```json
-{"type":"log","data":"Running TeX ..."}
-{"type":"done","url":"/files/<id>"}
-```
-
-The final PDF is then served through `GET /files/<id>`.
-
-## TeX Structure
+## TeX structure
 
 ### `bflatex`
 
-`texmf/tex/latex/bflatex/` contains the general base layer:
+`texmf/tex/latex/bflatex/` contains the base LaTeX layer used for general documents:
 
 - `bfarticle.cls`
 - `bfbook.cls`
@@ -195,7 +191,7 @@ Custom fonts are stored in the repository under:
 - `texmf/fonts/opentype/...`
 - `texmf/fonts/truetype/...`
 
-The current set includes, among others:
+Included fonts currently contain:
 
 - EB Garamond
 - Libertinus
@@ -204,51 +200,43 @@ The current set includes, among others:
 - Inter
 - Inter Display
 
-## Examples and Documents
+## Examples and documentation
 
-Under `texmf/doc/latex/bflatex/` you will find example and test files, including:
+Example and test files live under `texmf/doc/latex/bflatex/`, including:
 
 - `article.tex`
 - `book.tex`
 - `literature.bib`
 - `tikz.tex`
 
+## Local cache and runtime data
 
-
-## Cache and Local Runtime Data
-
-The local Tectonic cache is stored in:
+The local Tectonic cache is stored under:
 
 ```text
-.tectonic-cache/
+~/.gotex/.tectonic-cache
 ```
 
-Tectonic stores there:
+It stores:
 
 - downloaded bundles
-- resolved bundle contents
+- extracted package contents
 - format files (`.fmt`)
 
-This cache is runtime material and not a logical part of the main source tree.
+This cache is runtime data and not part of the source tree.
 
-## Current State
+## Current state
 
-The current state is intentionally local-first:
+GoTeX is intentionally local-first:
 
-- local fonts
-- a local `texmf` tree
-- an embedded web interface
-- Tectonic as a local binary
+- local fonts and packages stored in source control
+- a repository-local `texmf` tree
+- a self-contained local Tectonic runtime
+- a minimal embedded web interface
 
-Useful future extensions include:
+Future improvements can include:
 
-- multiple configurable search-path models for `texmf`
-- image upload and processing on the server side
-- AI-assisted generation of valid LaTeX
-- stronger Python/data-workflow or server integration
-
-## Notes
-
-- The project is clearly designed for local usage.
-- The server currently works with temporary build directories on purpose.
-- The web interface is intentionally minimal and not yet a full document management system.
+- configurable texmf search-path models
+- asset upload and processing in the server
+- AI-assisted LaTeX generation
+- a richer editor and document workflow

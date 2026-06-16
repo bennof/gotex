@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Benjamin Benno Falkner
 // SPDX-License-Identifier: MIT
 
+// config.go defines configuration options and defaults for the simpleserver package.
 package simpleserver
 
 import (

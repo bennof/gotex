@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Benjamin Benno Falkner
 // SPDX-License-Identifier: MIT
+
+// utils.go provides ID generation and file transfer helpers for the simpleserver package.
 package simpleserver
 
 import (

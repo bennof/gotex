@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Benjamin Benno Falkner
 // SPDX-License-Identifier: MIT
 
+// pool.go implements a bounded, TTL-based in-memory session store.
 package session
 
 import (

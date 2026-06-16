@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Benjamin Benno Falkner
 // SPDX-License-Identifier: MIT
+
+// fsutils.go provides file system utilities used by simpleserver.
 package simpleserver
 
 import (

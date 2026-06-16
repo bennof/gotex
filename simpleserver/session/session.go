@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Benjamin Benno Falkner
 // SPDX-License-Identifier: MIT
+
+// session.go defines the session interface and base session state implementation.
 package session
 
 import (

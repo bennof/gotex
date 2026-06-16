@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Benjamin Benno Falkner
 // SPDX-License-Identifier: MIT
 
+// server.go implements a lightweight HTTP server wrapper with graceful shutdown.
 package simpleserver
 
 import (

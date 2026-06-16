@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Benjamin Benno Falkner
 // SPDX-License-Identifier: MIT
+
+// xndjson.go provides helpers for JSON streaming over HTTP using x-ndjson.
 package stream
 
 import (

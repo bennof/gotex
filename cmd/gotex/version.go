@@ -10,7 +10,7 @@ import (
 	"github.com/bennof/gotex/simpleserver"
 )
 
-const Version = "0.08"
+const Version = "0.0.9"
 const ServerName = "gotex"
 const ServerMode = "tectonic - XeTeX - laTeX"
 
